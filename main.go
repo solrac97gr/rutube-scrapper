@@ -28,7 +28,7 @@ type Influencer struct {
 func main() {
 	// Create a Fyne application
 	a := app.New()
-	w := a.NewWindow("Rutube Scraper")
+	w := a.NewWindow("Rutube Scraper for Nastya ❤️")
 
 	// Widgets
 	title := widget.NewLabel("Rutube Scraper for Nastya ❤️")
