@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -17,6 +18,7 @@ import (
 type Influencer struct {
 	Name      string
 	Followers string
+	Index     int // Track the original order
 }
 
 func main() {
@@ -36,8 +38,13 @@ func main() {
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	// Scrape the links concurrently
+	// Scrape the links concurrently while preserving order
 	influencers := scrapeLinksConcurrently(links)
+
+	// Sort influencers by their original index to maintain order
+	sort.Slice(influencers, func(i, j int) bool {
+		return influencers[i].Index < influencers[j].Index
+	})
 
 	// Save the results to an Excel file
 	err = saveToExcel("influencers.xlsx", influencers)
@@ -48,7 +55,7 @@ func main() {
 	fmt.Println("Scraping complete! Results saved to 'influencers.xlsx'")
 }
 
-func scrapeRutubeProfile(url string) (Influencer, error) {
+func scrapeRutubeProfile(url string, index int) (Influencer, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return Influencer{}, fmt.Errorf("failed to fetch URL: %w", err)
@@ -64,42 +71,43 @@ func scrapeRutubeProfile(url string) (Influencer, error) {
 		return Influencer{}, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	// Simplify the selectors based on observed structure
-	name := doc.Find(".wdp-feed-banner-module__wdp-feed-banner__title h1 span").Text()
+	// Extract the name from the title attribute of the <h1> tag
+	name := doc.Find("h1.wdp-feed-banner-module__wdp-feed-banner__title-text").AttrOr("title", "")
 	name = strings.TrimSpace(name)
 
+	// Extract followers and clean the string
 	followers := doc.Find(".wdp-feed-banner-module__wdp-feed-banner__title p").Text()
 	followers = strings.TrimSpace(followers)
 
 	// Clean up the followers string to remove "подписчиков" and keep only the number
-	re := regexp.MustCompile(`[^\d]`)              // Matches any non-digit characters
-	followers = re.ReplaceAllString(followers, "") // Removes non-digit characters
+	re := regexp.MustCompile(`[^\d]`)
+	followers = re.ReplaceAllString(followers, "")
 
 	if name == "" || followers == "" {
 		return Influencer{}, fmt.Errorf("failed to extract name or followers, check selectors")
 	}
 
-	return Influencer{Name: name, Followers: followers}, nil
+	return Influencer{Name: name, Followers: followers, Index: index}, nil
 }
 
 func scrapeLinksConcurrently(links []string) []Influencer {
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	influencers := []Influencer{}
+	influencers := make([]Influencer, len(links)) // Pre-allocate slice to preserve order
+	mu := sync.Mutex{}
 
-	for _, link := range links {
+	for i, link := range links {
 		wg.Add(1)
-		go func(link string) {
+		go func(i int, link string) {
 			defer wg.Done()
-			influencer, err := scrapeRutubeProfile(link)
+			influencer, err := scrapeRutubeProfile(link, i)
 			if err != nil {
 				log.Printf("Error scraping %s: %v", link, err)
 				return
 			}
 			mu.Lock()
-			influencers = append(influencers, influencer)
+			influencers[i] = influencer // Store in the correct index
 			mu.Unlock()
-		}(link)
+		}(i, link)
 	}
 	wg.Wait()
 	return influencers
