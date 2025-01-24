@@ -6,9 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/xuri/excelize/v2"
 )
 
 type Influencer struct {
@@ -33,23 +36,16 @@ func main() {
 		log.Fatalf("Failed to read file: %v", err)
 	}
 
-	// Process each link and extract data
-	var influencers []Influencer
-	for _, link := range links {
-		fmt.Printf("Scraping: %s\n", link)
-		influencer, err := scrapeRutubeProfile(link)
-		if err != nil {
-			log.Printf("Failed to scrape %s: %v", link, err)
-			continue
-		}
-		influencers = append(influencers, influencer)
+	// Scrape the links concurrently
+	influencers := scrapeLinksConcurrently(links)
+
+	// Save the results to an Excel file
+	err = saveToExcel("influencers.xlsx", influencers)
+	if err != nil {
+		log.Fatalf("Failed to save to Excel: %v", err)
 	}
 
-	// Print the results
-	fmt.Println("Results:")
-	for _, influencer := range influencers {
-		fmt.Printf("Name: %s, Followers: %s\n", influencer.Name, influencer.Followers)
-	}
+	fmt.Println("Scraping complete! Results saved to 'influencers.xlsx'")
 }
 
 func scrapeRutubeProfile(url string) (Influencer, error) {
@@ -75,9 +71,59 @@ func scrapeRutubeProfile(url string) (Influencer, error) {
 	followers := doc.Find(".wdp-feed-banner-module__wdp-feed-banner__title p").Text()
 	followers = strings.TrimSpace(followers)
 
+	// Clean up the followers string to remove "подписчиков" and keep only the number
+	re := regexp.MustCompile(`[^\d]`)              // Matches any non-digit characters
+	followers = re.ReplaceAllString(followers, "") // Removes non-digit characters
+
 	if name == "" || followers == "" {
 		return Influencer{}, fmt.Errorf("failed to extract name or followers, check selectors")
 	}
 
 	return Influencer{Name: name, Followers: followers}, nil
+}
+
+func scrapeLinksConcurrently(links []string) []Influencer {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	influencers := []Influencer{}
+
+	for _, link := range links {
+		wg.Add(1)
+		go func(link string) {
+			defer wg.Done()
+			influencer, err := scrapeRutubeProfile(link)
+			if err != nil {
+				log.Printf("Error scraping %s: %v", link, err)
+				return
+			}
+			mu.Lock()
+			influencers = append(influencers, influencer)
+			mu.Unlock()
+		}(link)
+	}
+	wg.Wait()
+	return influencers
+}
+
+func saveToExcel(filename string, influencers []Influencer) error {
+	f := excelize.NewFile()
+
+	// Create a sheet and set headers
+	sheet := "Sheet1"
+	f.SetSheetName("Sheet1", sheet)
+	f.SetCellValue(sheet, "A1", "Name")
+	f.SetCellValue(sheet, "B1", "Followers")
+
+	// Populate the sheet with data
+	for i, inf := range influencers {
+		row := i + 2 // Start from the second row
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), inf.Name)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), inf.Followers)
+	}
+
+	// Save the Excel file
+	if err := f.SaveAs(filename); err != nil {
+		return fmt.Errorf("failed to save file: %w", err)
+	}
+	return nil
 }
