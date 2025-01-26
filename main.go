@@ -84,7 +84,7 @@ func main() {
 		resultLabel,
 	)
 	w.SetContent(content)
-	w.Resize(fyne.NewSize(400, 200))
+	w.Resize(fyne.NewSize(800, 400))
 	w.ShowAndRun()
 }
 
